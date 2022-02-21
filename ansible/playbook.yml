@@ -1,0 +1,57 @@
+# This playbook sets up a kubernetes control plan, a worker, starts the cluster
+# and joins the worker to it.
+#
+# When running, enter the sudo password for the ansible host so that you can use its filesystem
+# ansible-playbook -i hosts playbook.yml --ask-become-pass
+
+  #vars:
+  #  githubpassword: "{{ lookup('file', '.vault_pass.txt') }}"
+- hosts: 'workers, cps'
+  tasks:
+    - name: Create kube user
+      include_tasks: tasks/user.yml
+
+- hosts: "workers, cps"
+  remote_user: ubuntu
+  become: yes
+  become_method: sudo
+  become_user: root
+  gather_facts: yes
+  connection: ssh
+  vars:
+    os_version: xUbuntu_20.04
+    crio_version: 1.23
+    google_apt_gpg_key: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
+    kubic_apt_gpg_key: "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/{{ os_version}}/Release.key"
+    crio_apt_gpg_key: "http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/{{ crio_version }}/{{ os_version }}/Release.key"
+    kubernetes_apt_gpg_key: "https://packages.cloud.google.com/apt/doc/apt-key.gpg"
+    kubic_apt_repository: "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/{{ os_version }} /"
+    crio_apt_repository: "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/{{ crio_version }}/{{ os_version }} /"
+    kubernetes_apt_repository: "deb http://apt.kubernetes.io/ kubernetes-xenial main"
+
+  tasks:
+    - name: Install k8s
+      include_tasks: tasks/install-k8s.yml
+
+- hosts: "cps"
+  become: yes
+  become_method: sudo
+  become_user: root
+  gather_facts: yes
+  connection: ssh
+  vars:
+    calico_manifest: "https://docs.projectcalico.org/manifests/calico.yaml"
+    helm_binary_release: "https://get.helm.sh/helm-v3.8.0-linux-amd64.tar.gz"
+
+  tasks:
+    - name: Initialize control plane
+      include_tasks: tasks/cp.yml
+
+- hosts: "workers"
+  become: yes
+  gather_facts: yes
+  connection: ssh
+
+  tasks:
+    - name: Add worker nodes to cluster
+      include_tasks: tasks/worker.yml

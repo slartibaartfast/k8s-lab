@@ -1,0 +1,71 @@
+# This playbook uses kubeadm to initialize a k8s control plan on a node.
+# It also installs a Calico network, and the Helm package manager.
+
+    # Check if admin.conf file exists, indicating that kubeadm init has been run
+    - name: Check if admin.conf file exists
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: k8s_conf
+
+    # TODO: Get the cidr from terraform
+    # TODO: Get the control-plane-endpoint from terraform, apply it to kubeadm
+    - name: initialize the cluster
+      shell: kubeadm init
+      #shell: kubeadm init --pod-network-cidr={{ subnetwork_ip_cidr_range }}
+      args:
+        chdir: $HOME
+        creates: cluster_initialized.txt
+      register: k8s_initialized
+      when: not k8s_conf.stat.exists
+
+    - name: create .kube directory
+      file:
+        path: /home/kube/.kube
+        state: directory
+        mode: 0755
+      when: k8s_initialized is succeeded
+
+    - name: copies admin.conf to user's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/kube/.kube/config
+        remote_src: yes
+        owner: kube
+      when: k8s_initialized is succeeded
+
+    - name: Apply Calico network plugin
+      become: yes
+      become_method: sudo
+      become_user: kube
+      vars:
+        allow_world_readable_tmpfiles: true
+      shell: kubectl apply -f {{  calico_manifest  }}
+      args:
+        chdir: /home/kube
+      when: k8s_initialized is succeeded
+
+    - name: Get the token for joining the worker nodes
+      become: yes
+      become_method: sudo
+      become_user: kube
+      shell: kubeadm token create  --print-join-command
+      register: kubernetes_join_command
+      when: k8s_initialized is succeeded
+
+    - debug:
+        msg: "{{ kubernetes_join_command.stdout }}"
+
+    - name: Copy join command to the ansible host
+      become: yes
+      #become_method: sudo
+      #vars:
+      #  allow_world_readable_tmpfiles: true
+      local_action: copy content="{{ kubernetes_join_command.stdout_lines[0] }}" dest="/tmp/kubernetes_join_command" mode=0777
+      when: kubernetes_join_command.stdout[0] != ""
+
+    - name: Install Helm
+      become: yes
+      shell: |
+              wget {{  helm_binary_release  }}
+              tar -xf helm-v3.8.0-linux-amd64.tar.gz
+              sudo cp linux-amd64/helm /usr/local/bin/

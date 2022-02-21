@@ -1,0 +1,101 @@
+# This playbook prepares a node for k8s 1.23.1-00 installation by installing
+# prerequisites and packages, such as cri-o, kubelet, kubeadm, and kubectl
+
+    - name: Bring node to current version and install an editor
+      apt:
+        name:
+          - vim
+          - nano
+          - libseccomp2
+          - apt-transport-https
+          - curl
+          - ca-certificates
+          #- gnupg2
+        state: present
+
+    - name: Add google's key
+      shell: |
+              curl -s {{ google_apt_gpg_key }} | sudo apt-key add -
+
+    - name: Create the .conf file to load the modules at bootup
+      shell: |
+              cat <<EOF | sudo tee /etc/modules-load.d/crio.conf
+              overlay
+              br_netfilter
+              EOF
+
+    - name: Prepare for cri-o
+      shell: |
+              sudo modprobe overlay
+              sudo modprobe br_netfilter
+
+    - name: Set system configurations for Kubernetes networking
+      file:
+        path: "/etc/sysctl.d/99-kubernetes-cri.conf"
+        state: "touch"
+
+    - name: Add conf for container runtime
+      blockinfile:
+        path: "/etc/sysctl.d/99-kubernetes-cri.conf"
+        block: |
+                  net.bridge.bridge-nf-call-iptables = 1
+                  net.ipv4.ip_forward = 1
+                  net.bridge.bridge-nf-call-ip6tables = 1
+
+    - name: Apply new settings
+      command: sudo sysctl --system
+
+    - name: Add key for cri-o
+      shell: |
+              curl -L {{ crio_apt_gpg_key }} | sudo apt-key add -
+
+    - name: Add repo for cri-o
+      apt_repository:
+        repo: "{{ crio_apt_repository }}"
+        filename: "devel:kubic:libcontainers:stable:cri-o"
+        state: present
+        update_cache: true
+
+    - name: Add key for kubic
+      shell: |
+              curl -L {{ kubic_apt_gpg_key }} | sudo apt-key add -
+
+    - name: Add repo for kubic
+      apt_repository:
+        repo: "{{ kubic_apt_repository }}"
+        filename: "devel:kubic:libcontainers:stable"
+        state: present
+        update_cache: true
+
+    - name: Install cri-o and start it
+      shell: |
+              sudo apt-get update
+              sudo apt-get install -y cri-o cri-o-runc podman buildah
+              sudo sytemctl daemon-reload
+              sudo systemctl enable crio
+              sudo systemctl start crio
+
+    - name: Add key for Kubernetes
+      shell: |
+              curl -L {{ kubic_apt_gpg_key }} | sudo apt-key add -
+
+    - name: Create kubernetes.list.d for Kubernetes
+      file:
+        path: "/etc/apt/sources.list.d/kubernetes.list"
+        state: "touch"
+
+    - name: Add Kubernetes repo
+      apt_repository:
+        repo: "{{ kubernetes_apt_repository }}"
+        state: present
+        update_cache: true
+
+    - name: Install kubelet, kubeadm, and kubectl
+      shell: |
+              sudo apt-get update
+              sudo apt-get install -y kubelet=1.23.1-00 kubeadm=1.23.1-00 kubectl=1.23.1-00
+              sudo apt-mark hold kubelet kubeadm kubectl
+
+    - name: Autoremove packages which are no longer required
+      shell: |
+              sudo apt autoremove
